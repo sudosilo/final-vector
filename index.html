@@ -462,6 +462,33 @@ function drawSkin(A, sk, x, y, s, col, fr) {
     }
   sk === "rocket" && fr % 6 < 3 && ((A.fillStyle = "#FF6F00"), A.fillRect(x - c * 2, y + c * 3, c * 2, c * 2));
 }
+const BADGES = [
+    ["first_bite", "FIRST BITE", "Eat your first pixel"],
+    ["shield", "SHIELDED", "Grab a shield"],
+    ["combo4", "ON A ROLL", "Reach a x4 combo"],
+    ["combo8", "UNSTOPPABLE", "Reach a x8 combo"],
+    ["risk10", "RISK TAKER", "10 risk eats in one run"],
+    ["close10", "CLOSE SHAVE", "10 close calls in one run"],
+    ["close100", "NERVES OF STEEL", "100 close calls total"],
+    ["max_size", "FULL SIZE", "Grow to size 7 from a fresh start"],
+    ["scale3", "SCALE 3", "Reach scale 3 from a fresh start"],
+    ["scale5", "SCALE 5", "Reach scale 5 from a fresh start"],
+    ["scale7", "SCALE 7", "Reach scale 7 from a fresh start"],
+    ["boss_survive", "STILL STANDING", "Outlast a boss"],
+    ["boss_slay", "BOSS SLAYER", "Defeat a boss"],
+    ["score1k", "FOUR DIGITS", "Score 1,000 from a fresh start"],
+    ["score10k", "FIVE DIGITS", "Score 10,000 from a fresh start"],
+  ],
+  BOSS_SIZE = 32,
+  BOSS_HP = 8;
+function getBadges() { try { return JSON.parse(lsGet("fv_badges", "[]")); } catch { return []; } }
+function unlockBadge(B, id) {
+  const have = getBadges();
+  if (have.indexOf(id) !== -1) return;
+  (have.push(id), lsSet("fv_badges", JSON.stringify(have)));
+  const bd = BADGES.find((x) => x[0] === id);
+  (B.toasts.push({ t: "BADGE: " + (bd ? bd[1] : id), life: 150 }), B.newBadges.push(id));
+}
 function loadGhost() { try { return JSON.parse(lsGet("fv_ghost", "null")); } catch { return null; } }
 let TH = THEMES.day;
 try { const sv = localStorage.getItem("fv_theme"); if (sv && THEMES[sv]) TH = THEMES[sv]; } catch {}
@@ -1059,6 +1086,7 @@ function App() {
     [j, v] = useState(!1),
     [thm, setThm] = useState(TH.name),
     [skin, setSkin] = useState(SKIN),
+    [bdgOpen, setBdgOpen] = useState(!1),
     [ghostOn, setGhostOn] = useState(lsGet("fv_ghost_on", "1") === "1"),
     GHOST_ON = useRef(lsGet("fv_ghost_on", "1") === "1"),
     [wb, setWb] = useState(null),
@@ -1134,6 +1162,13 @@ function App() {
         pops: [],
         rec: [],
         ghost: GHOST_ON.current ? loadGhost() : null,
+        fresh: D === PLAYER_START && g === 0,
+        toasts: [],
+        newBadges: [],
+        closeCalls: 0,
+        riskEats: 0,
+        boss: null,
+        bossDone: -1,
       };
     }, []),
     BA = (D) => {
@@ -1571,7 +1606,8 @@ function App() {
                     const mu = Math.min(8, 1 + Math.floor(Math.max(0, B.combo - 1) / 3)),
                       pt = TIER_POINTS[Math.min(E.ti, 6)] * mu;
                     ((B.score += pt), R(B.score),
-                      B.pops.push({ x: PLAYER_X + B.ps + 4, y: B.py, life: 45, t: "CLOSE CALL +" + pt, c: "#FF6EC7" }));
+                      B.pops.push({ x: PLAYER_X + B.ps + 4, y: B.py, life: 45, t: "CLOSE CALL +" + pt, c: "#FF6EC7" }),
+                      ++B.closeCalls >= 10 && unlockBadge(B, "close10"));
                   }
                 }
                 ((E.x += E.vx),
@@ -1607,7 +1643,7 @@ function App() {
                   B.py < E.y + 10 &&
                   B.py + B.ps > E.y
                 ) {
-                  ((E.alive = !1), (B.shieldTimer = SHIELD_DURATION));
+                  ((E.alive = !1), (B.shieldTimer = SHIELD_DURATION), unlockBadge(B, "shield"));
                   for (let k = 0; k < 16; k++) {
                     const s = (Math.PI * 2 * k) / 16;
                     B.parts.push({
@@ -1623,6 +1659,47 @@ function App() {
                   }
                 }
               }),
+              (() => {
+                !B.boss && B.ptier >= 5 && B.bossDone !== B.level &&
+                  ((B.bossDone = B.level),
+                  (B.boss = { x: W + 10, y: H / 2 - BOSS_SIZE / 2, hp: BOSS_HP, t: 0, mode: "enter", hx: 230, flash: 0 }),
+                  B.toasts.push({ t: "BOSS INCOMING", life: 120 }));
+                const bo = B.boss;
+                if (!bo) return;
+                (bo.t++, bo.flash > 0 && bo.flash--);
+                const ty = B.py + B.ps / 2 - BOSS_SIZE / 2;
+                if (bo.mode === "enter") (bo.x -= 1.2), bo.x <= bo.hx && (bo.mode = "hover");
+                else if (bo.mode === "hover") {
+                  ((bo.y += Math.max(-1.1, Math.min(1.1, (ty - bo.y) * 0.02))),
+                    (bo.x = bo.hx + Math.sin(bo.t * 0.03) * 25),
+                    bo.t % 50 === 0 &&
+                      B.entities.push({
+                        ti: ~~(Math.random() * Math.min(B.ptier, 3)), danger: !1, boss: !0,
+                        s: 0, c: "#D32F2F", c2: "#FFB300", style: "solid", phase: 0,
+                        x: bo.x - 6, y: bo.y + BOSS_SIZE / 2 + (Math.random() - 0.5) * 20,
+                        vy: (Math.random() - 0.5) * 1.2, vx: -(1.3 + Math.random() * 0.6), alive: !0,
+                      }),
+                    B.entities.forEach((o) => o.boss && !o.s && (o.s = TIER_SIZES[o.ti])),
+                    bo.t % 260 === 200 && (bo.mode = "warn"),
+                    bo.t > 1500 && (bo.mode = "leave"));
+                } else if (bo.mode === "warn") bo.t % 260 === 230 && ((bo.mode = "charge"), (bo.cy = ty));
+                else if (bo.mode === "charge") (bo.x -= 4.5), bo.x < PLAYER_X - 40 && (bo.mode = "back");
+                else if (bo.mode === "back") (bo.x += 2), bo.x >= bo.hx && (bo.mode = "hover");
+                else if (bo.mode === "leave" || bo.mode === "dead") {
+                  if (((bo.x += 2.5), bo.x > W + 40)) {
+                    if (bo.mode === "leave") {
+                      const bn = 100 * (B.level + 1);
+                      ((B.score += bn), R(B.score), B.toasts.push({ t: "BOSS OUTLASTED +" + bn, life: 120 }), unlockBadge(B, "boss_survive"));
+                    }
+                    B.boss = null;
+                    return;
+                  }
+                }
+                if (bo.mode !== "dead" && bo.mode !== "leave" &&
+                  PLAYER_X < bo.x + BOSS_SIZE && PLAYER_X + B.ps > bo.x && B.py < bo.y + BOSS_SIZE && B.py + B.ps > bo.y)
+                  B.entities.push({ ti: 6, danger: !0, s: B.ps, c: "#D32F2F", c2: "#000", style: "solid", phase: 0, x: PLAYER_X, y: B.py, vx: 0, vy: 0, alive: !0 }),
+                    B.shieldTimer > 0 && ((bo.mode = "back"), (bo.flash = 20));
+              })(),
               B.entities.forEach((E) => {
                 if (
                   E.alive &&
@@ -1638,13 +1715,17 @@ function App() {
                     }
                     B.dead = !0;
                     try {
+                      const tc = (parseInt(lsGet("fv_close_total", "0"), 10) || 0) + B.closeCalls;
+                      (lsSet("fv_close_total", String(tc)), tc >= 100 && unlockBadge(B, "close100"));
+                    } catch {}
+                    try {
                       const og = loadGhost();
                       (!og || B.score > og.score) && B.score > 0 &&
                         lsSet("fv_ghost", JSON.stringify({ score: B.score, p: B.rec }));
                     } catch {}
                     const k = B.score,
                       s = B.level;
-                    L.current = { score: k, level: s };
+                    L.current = { score: k, level: s, badges: B.newBadges.slice() };
                     for (let l = 0; l < 14; l++) {
                       const Z = (Math.PI * 2 * l) / 14;
                       B.parts.push({
@@ -1671,8 +1752,22 @@ function App() {
                         (o) => o.alive && o.danger && Math.hypot(o.x + o.s / 2 - cx, o.y + o.s / 2 - cy) < (o.s + B.ps) / 2 + 26,
                       ),
                       pt = TIER_POINTS[E.ti] * mu * (near ? 2 : 1);
+                    (unlockBadge(B, "first_bite"),
+                      mu >= 2 && unlockBadge(B, "combo4"),
+                      mu >= 8 && unlockBadge(B, "combo8"),
+                      near && ++B.riskEats >= 10 && unlockBadge(B, "risk10"));
+                    if (E.boss && B.boss && B.boss.mode !== "dead" && B.boss.mode !== "leave" && ((B.boss.flash = 12), --B.boss.hp <= 0)) {
+                      const bn = 250 * (B.level + 1);
+                      ((B.boss.mode = "dead"), (B.score += bn), B.toasts.push({ t: "BOSS DEFEATED +" + bn, life: 140 }), unlockBadge(B, "boss_slay"));
+                      for (let q = 0; q < 24; q++) {
+                        const z = (Math.PI * 2 * q) / 24;
+                        B.parts.push({ x: B.boss.x + BOSS_SIZE / 2, y: B.boss.y + BOSS_SIZE / 2, vx: Math.cos(z) * 4, vy: Math.sin(z) * 4, life: 40, s: 6, c: "#D32F2F" });
+                      }
+                    }
                     ((B.score += pt),
                       (B.progress += TIER_POINTS[E.ti]),
+                      B.fresh && B.score >= 1000 && unlockBadge(B, "score1k"),
+                      B.fresh && B.score >= 10000 && unlockBadge(B, "score10k"),
                       (mu > 1 || near) &&
                         B.pops.push({
                           x: E.x, y: E.y, life: 35, c: near ? TH.hi : TH.text,
@@ -1695,6 +1790,7 @@ function App() {
                       B.ptier < TIER_SIZES.length - 1
                     ) {
                       (B.ptier++,
+                        B.fresh && B.ptier === TIER_SIZES.length - 1 && unlockBadge(B, "max_size"),
                         (B.ps = TIER_SIZES[B.ptier]),
                         (B.progress = 0),
                         (B.trail = []),
@@ -1717,6 +1813,10 @@ function App() {
                       ((B.zooming = !0),
                       (B.zoomProgress = 0),
                       B.level++,
+                      (B.boss = null),
+                      B.fresh && B.level >= 2 && unlockBadge(B, "scale3"),
+                      B.fresh && B.level >= 4 && unlockBadge(B, "scale5"),
+                      B.fresh && B.level >= 6 && unlockBadge(B, "scale7"),
                       B.ghosts.push({
                         size: B.ps,
                         y: B.py,
@@ -1897,6 +1997,43 @@ function App() {
                 (g.fillStyle = G.c), (g.font = "bold 8px monospace"), g.fillText(G.t, ~~G.x, ~~G.y));
             });
             ((B.pops = B.pops.filter((G) => G.life > 0)), (g.globalAlpha = 1));
+            if (B.boss) {
+              const bo = B.boss, bx = ~~bo.x, by = ~~bo.y, warn = bo.mode === "warn" && ~~(B.frame / 4) % 2 === 0;
+              ((g.globalAlpha = bo.mode === "dead" ? 0.35 : 1),
+                (g.fillStyle = bo.flash > 0 ? "#ffffff" : warn ? "#FF6F00" : "#C62828"),
+                g.fillRect(bx, by, BOSS_SIZE, BOSS_SIZE),
+                (g.fillStyle = "#7F0000"),
+                g.fillRect(bx, by + BOSS_SIZE - 4, BOSS_SIZE, 4),
+                (g.fillStyle = "#ffffff"),
+                g.fillRect(bx + 6, by + 9, 7, 7),
+                g.fillRect(bx + 19, by + 9, 7, 7),
+                (g.fillStyle = "#111111"),
+                g.fillRect(bx + 6, by + 12, 4, 4),
+                g.fillRect(bx + 19, by + 12, 4, 4),
+                g.fillRect(bx + 4, by + 6, 10, 2),
+                g.fillRect(bx + 18, by + 6, 10, 2),
+                g.fillRect(bx + 9, by + 22, 14, 3),
+                (g.globalAlpha = 1),
+                (g.fillStyle = TH.empty),
+                g.fillRect(bx, by - 7, BOSS_SIZE, 3),
+                (g.fillStyle = "#C62828"),
+                g.fillRect(bx, by - 7, (BOSS_SIZE * Math.max(0, bo.hp)) / BOSS_HP, 3),
+                warn && ((g.fillStyle = "#FF6F00"), (g.font = "bold 8px monospace"), g.fillText("!", bx - 8, by + BOSS_SIZE / 2 + 3)));
+            }
+            if (B.toasts.length) {
+              const to = B.toasts[0];
+              (to.life--,
+                (g.globalAlpha = Math.min(1, to.life / 20)),
+                (g.fillStyle = TH.hud),
+                g.fillRect(W / 2 - 110, 44, 220, 18),
+                (g.fillStyle = TH.hi),
+                (g.font = "bold 9px monospace"),
+                (g.textAlign = "center"),
+                g.fillText(to.t, W / 2, 56),
+                (g.textAlign = "left"),
+                (g.globalAlpha = 1),
+                to.life <= 0 && B.toasts.shift());
+            }
             const E = getPalette(a)[B.ptier % 10],
               k = B.shieldTimer > 0,
               s = k && B.shieldTimer <= SHIELD_FLASH,
@@ -2253,6 +2390,13 @@ function App() {
             ),
           worldRows.length > 0 && boardBox("WORLD TOP SCORES", worldRows, 8, !0),
           P.length > 0 && boardBox("THIS DEVICE", localRows, 5, !0),
+          L.current.badges && L.current.badges.length > 0 &&
+            React.createElement(
+              "div",
+              { style: { fontSize: 9, color: TH.hi, letterSpacing: 2, textAlign: "center", lineHeight: 1.8 } },
+              "NEW BADGES: ",
+              L.current.badges.map((id) => (BADGES.find((x) => x[0] === id) || [id, id])[1]).join(" \xB7 "),
+            ),
           React.createElement(
             "div",
             {
@@ -2609,6 +2753,30 @@ function App() {
                     ghostOn ? "GHOST ON" : "GHOST OFF",
                   ),
                 !j && themeBtn(8),
+                !j &&
+                  React.createElement(
+                    "div",
+                    {
+                      onClick: (D) => { (D.stopPropagation(), setBdgOpen((x) => !x)); },
+                      style: { fontSize: 8, color: "#FF6EC7", letterSpacing: 3, cursor: "pointer", border: "1px solid " + TH.line, padding: "4px 12px", background: TH.panel },
+                    },
+                    bdgOpen ? "CLOSE BADGES" : "BADGES " + getBadges().length + "/" + BADGES.length,
+                  ),
+                !j && bdgOpen &&
+                  React.createElement(
+                    "div",
+                    { onClick: (D) => D.stopPropagation(), style: { width: "88%", background: TH.panel, border: "1px solid " + TH.line, padding: "8px 10px" } },
+                    BADGES.map((x) => {
+                      const got = getBadges().indexOf(x[0]) !== -1;
+                      return React.createElement(
+                        "div",
+                        { key: x[0], style: { display: "flex", alignItems: "center", gap: 8, marginBottom: 4, opacity: got ? 1 : 0.45 } },
+                        React.createElement("div", { style: { width: 9, height: 9, background: got ? TH.hi : "transparent", border: "1px solid " + (got ? TH.hi : TH.line) } }),
+                        React.createElement("div", { style: { fontSize: 8, color: got ? TH.hi : TH.text, letterSpacing: 1, width: 104, fontWeight: "bold" } }, x[1]),
+                        React.createElement("div", { style: { fontSize: 7, color: TH.text, flex: 1 } }, x[2]),
+                      );
+                    }),
+                  ),
               ),
           ),
           React.createElement(
