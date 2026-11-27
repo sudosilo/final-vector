@@ -435,6 +435,34 @@ const DAY_PALETTES = [
     },
   },
   GAME_ID = "final-victor";
+const SKINS = {
+    pixel: null,
+    fish: [["........","...###..","#.#####.","######e#","#######.","#.#####.","...###..","........"]],
+    bird: [["..#.....","..##....","...##.##",".#####e#","..######","....##..","........","........"],
+           ["........","........","...#..##",".#####e#","..######","...##...","..##....","..#....."]],
+    plane: [["........","#.......","##...##.","#######.","#eee####","...##...","..##....","........"]],
+    rocket: [["........","#.......","######..","####e###","####e###","######..","#.......","........"]],
+    ufo: [["........","...##...","..#ee#..",".######.","########",".#.#.#..","........","........"]],
+  },
+  SKIN_NAMES = ["pixel", "fish", "bird", "plane", "rocket", "ufo"];
+function lsGet(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch { return d; } }
+function lsSet(k, v) { try { localStorage.setItem(k, v); } catch {} }
+let SKIN = SKINS.hasOwnProperty(lsGet("fv_skin", "pixel")) ? lsGet("fv_skin", "pixel") : "pixel";
+function drawSkin(A, sk, x, y, s, col, fr) {
+  const sp = SKINS[sk];
+  if (!sp) { (A.fillStyle = col), A.fillRect(x, y, s, s); return; }
+  if (s < 8) { (x -= (8 - s) / 2), (y -= (8 - s) / 2), (s = 8); }
+  const rows = sp[sp.length > 1 ? ~~(fr / 10) % sp.length : 0], c = s / 8;
+  for (let r = 0; r < 8; r++)
+    for (let q = 0; q < 8; q++) {
+      const ch = rows[r][q];
+      if (ch === ".") continue;
+      (A.fillStyle = ch === "e" ? "#111111" : col),
+        A.fillRect(x + q * c, y + r * c, Math.ceil(c), Math.ceil(c));
+    }
+  sk === "rocket" && fr % 6 < 3 && ((A.fillStyle = "#FF6F00"), A.fillRect(x - c * 2, y + c * 3, c * 2, c * 2));
+}
+function loadGhost() { try { return JSON.parse(lsGet("fv_ghost", "null")); } catch { return null; } }
 let TH = THEMES.day;
 try { const sv = localStorage.getItem("fv_theme"); if (sv && THEMES[sv]) TH = THEMES[sv]; } catch {}
 function setTheme(n) { TH = THEMES[n] || THEMES.day; try { localStorage.setItem("fv_theme", TH.name); } catch {} }
@@ -1030,6 +1058,9 @@ function App() {
     [X, f] = useState(0),
     [j, v] = useState(!1),
     [thm, setThm] = useState(TH.name),
+    [skin, setSkin] = useState(SKIN),
+    [ghostOn, setGhostOn] = useState(lsGet("fv_ghost_on", "1") === "1"),
+    GHOST_ON = useRef(lsGet("fv_ghost_on", "1") === "1"),
     [wb, setWb] = useState(null),
     [post, setPost] = useState(""),
     KB = useRef({ up: !1, down: !1 }),
@@ -1098,6 +1129,11 @@ function App() {
         beamLock: 0,
         frame: 0,
         dead: !1,
+        combo: 0,
+        lastEat: -999,
+        pops: [],
+        rec: [],
+        ghost: GHOST_ON.current ? loadGhost() : null,
       };
     }, []),
     BA = (D) => {
@@ -1288,7 +1324,9 @@ function App() {
         T = () => {
           const B = C.current;
           if (!B || B.dead) return;
-          (B.frame++,
+          (B.frame % 4 === 0 && B.rec.length < 30000 && B.rec.push(~~B.py * 8 + B.ptier),
+            B.frame - B.lastEat > 60 && (B.combo = 0),
+            B.frame++,
             B.shieldTimer > 0 && B.shieldTimer--,
             B.beamLock > 0 && B.beamLock--);
           const a = B.level;
@@ -1526,6 +1564,16 @@ function App() {
               }),
               (B.powerups = B.powerups.filter((E) => E.x + 10 > 0 && E.alive)),
               B.entities.forEach((E) => {
+                if (E.danger && E.alive && !E.passed && E.x + E.s < PLAYER_X) {
+                  E.passed = !0;
+                  const gp = Math.max(E.y - (B.py + B.ps), B.py - (E.y + E.s));
+                  if (gp >= 0 && gp < 10) {
+                    const mu = Math.min(8, 1 + Math.floor(Math.max(0, B.combo - 1) / 3)),
+                      pt = TIER_POINTS[Math.min(E.ti, 6)] * mu;
+                    ((B.score += pt), R(B.score),
+                      B.pops.push({ x: PLAYER_X + B.ps + 4, y: B.py, life: 45, t: "CLOSE CALL +" + pt, c: "#FF6EC7" }));
+                  }
+                }
                 ((E.x += E.vx),
                   (E.y += E.vy),
                   (E.y < 2 || E.y + E.s > H - 2) && (E.vy *= -1),
@@ -1589,6 +1637,11 @@ function App() {
                       return;
                     }
                     B.dead = !0;
+                    try {
+                      const og = loadGhost();
+                      (!og || B.score > og.score) && B.score > 0 &&
+                        lsSet("fv_ghost", JSON.stringify({ score: B.score, p: B.rec }));
+                    } catch {}
                     const k = B.score,
                       s = B.level;
                     L.current = { score: k, level: s };
@@ -1609,8 +1662,22 @@ function App() {
                     }, 400);
                   } else {
                     ((E.alive = !1),
-                      (B.score += TIER_POINTS[E.ti]),
-                      (B.progress += TIER_POINTS[E.ti]));
+                      (B.combo = B.frame - B.lastEat <= 60 ? B.combo + 1 : 1),
+                      (B.lastEat = B.frame));
+                    const mu = Math.min(8, 1 + Math.floor((B.combo - 1) / 3)),
+                      cx = PLAYER_X + B.ps / 2,
+                      cy = B.py + B.ps / 2,
+                      near = B.entities.some(
+                        (o) => o.alive && o.danger && Math.hypot(o.x + o.s / 2 - cx, o.y + o.s / 2 - cy) < (o.s + B.ps) / 2 + 26,
+                      ),
+                      pt = TIER_POINTS[E.ti] * mu * (near ? 2 : 1);
+                    ((B.score += pt),
+                      (B.progress += TIER_POINTS[E.ti]),
+                      (mu > 1 || near) &&
+                        B.pops.push({
+                          x: E.x, y: E.y, life: 35, c: near ? TH.hi : TH.text,
+                          t: "+" + pt + (near ? " RISK" : "") + (mu > 1 ? " x" + mu : ""),
+                        }));
                     for (let k = 0; k < 5; k++) {
                       const s = Math.random() * Math.PI * 2;
                       B.parts.push({
@@ -1812,6 +1879,24 @@ function App() {
                   4,
                   4,
                 )));
+            if (B.ghost && B.ghost.p) {
+              const gv = B.ghost.p[~~(B.frame / 4)];
+              if (gv !== void 0) {
+                const gt = gv % 8, gs = TIER_SIZES[gt];
+                ((g.globalAlpha = 0.28),
+                  drawSkin(g, SKIN, PLAYER_X, ~~(gv / 8), gs, TH.ink, B.frame),
+                  (g.globalAlpha = 0.5),
+                  (g.fillStyle = TH.ink),
+                  (g.font = "6px monospace"),
+                  g.fillText("BEST", PLAYER_X, ~~(gv / 8) - 3),
+                  (g.globalAlpha = 1));
+              }
+            }
+            B.pops.forEach((G) => {
+              (G.life--, (G.y -= 0.5), (g.globalAlpha = Math.min(1, G.life / 15)),
+                (g.fillStyle = G.c), (g.font = "bold 8px monospace"), g.fillText(G.t, ~~G.x, ~~G.y));
+            });
+            ((B.pops = B.pops.filter((G) => G.life > 0)), (g.globalAlpha = 1));
             const E = getPalette(a)[B.ptier % 10],
               k = B.shieldTimer > 0,
               s = k && B.shieldTimer <= SHIELD_FLASH,
@@ -1831,8 +1916,7 @@ function App() {
             ) {
               if (
                 ((g.globalAlpha = s ? (l ? 0.25 : 0.9) : 0.45),
-                (g.fillStyle = E),
-                g.fillRect(PLAYER_X, ~~B.py, B.ps, B.ps),
+                drawSkin(g, SKIN, PLAYER_X, ~~B.py, B.ps, E, B.frame),
                 (g.globalAlpha = s ? (l ? 0.5 : 1) : 0.6),
                 (g.strokeStyle = TH.ink),
                 (g.lineWidth = s ? 2 : 1),
@@ -1849,12 +1933,20 @@ function App() {
                   g.fillRect(PLAYER_X, ~~B.py - 5, B.ps * G, 3));
               }
             } else
-              ((g.fillStyle = E), g.fillRect(PLAYER_X, ~~B.py, B.ps, B.ps));
+              drawSkin(g, SKIN, PLAYER_X, ~~B.py, B.ps, E, B.frame);
             ((g.fillStyle = TH.hud),
               g.fillRect(5, 5, 80, 15),
               (g.fillStyle = TH.text),
               (g.font = "8px monospace"),
               g.fillText(`${B.score}`, 9, 15),
+              B.combo >= 4 &&
+                ((g.fillStyle = TH.hud),
+                g.fillRect(88, 5, 70, 15),
+                (g.fillStyle = TH.hi),
+                (g.font = "bold 8px monospace"),
+                g.fillText(`x${Math.min(8, 1 + Math.floor((B.combo - 1) / 3))} COMBO`, 92, 15),
+                (g.fillStyle = TH.hi),
+                g.fillRect(88, 19, 70 * Math.max(0, 1 - (B.frame - B.lastEat) / 60), 2)),
               a > 0 &&
                 ((g.fillStyle = TH.hud),
                 g.fillRect(5, 22, 62, 13),
@@ -2354,6 +2446,8 @@ function App() {
                   "EAT SMALLER \xB7 DODGE BIGGER \xB7 NO END",
                   React.createElement("br", null),
                   "KEYBOARD: UP DOWN OR W S",
+                  React.createElement("br", null),
+                  "CHAIN EATS FOR COMBOS \xB7 RISK PAYS DOUBLE",
                 ),
                 React.createElement(
                   "div",
@@ -2472,6 +2566,48 @@ function App() {
                   (worldRows.length > 0
                     ? boardBox("WORLD TOP SCORES", worldRows, 5)
                     : P.length > 0 && boardBox("HIGH SCORES", localRows, 4)),
+                !j &&
+                  React.createElement(
+                    "div",
+                    { onClick: (D) => D.stopPropagation(), style: { display: "flex", flexWrap: "wrap", justifyContent: "center", gap: 6, width: "90%" } },
+                    SKIN_NAMES.map((nm) =>
+                      React.createElement(
+                        "div",
+                        {
+                          key: nm,
+                          onClick: () => { (SKIN = nm), lsSet("fv_skin", nm), setSkin(nm); },
+                          style: {
+                            width: 44, padding: "5px 0", display: "flex", flexDirection: "column", alignItems: "center", gap: 3,
+                            cursor: "pointer", background: skin === nm ? TH.cell : TH.panel,
+                            border: (skin === nm ? "2px solid " + TH.hi : "1px solid " + TH.line),
+                          },
+                        },
+                        React.createElement(
+                          "div",
+                          { style: { display: "grid", gridTemplateColumns: "repeat(8,3px)", gridAutoRows: "3px" } },
+                          (SKINS[nm] ? SKINS[nm][0].join("") : "################################################################")
+                            .split("")
+                            .map((ch, z) =>
+                              React.createElement("div", { key: z, style: { background: ch === "." ? "transparent" : ch === "e" ? "#111" : $ } }),
+                            ),
+                        ),
+                        React.createElement("div", { style: { fontSize: 6, color: TH.text, letterSpacing: 1 } }, nm.toUpperCase()),
+                      ),
+                    ),
+                  ),
+                !j &&
+                  React.createElement(
+                    "div",
+                    {
+                      onClick: (D) => {
+                        D.stopPropagation();
+                        const g = !ghostOn;
+                        ((GHOST_ON.current = g), lsSet("fv_ghost_on", g ? "1" : "0"), setGhostOn(g));
+                      },
+                      style: { fontSize: 8, color: "#FF6EC7", letterSpacing: 3, cursor: "pointer", border: "1px solid " + TH.line, padding: "4px 12px", background: TH.panel },
+                    },
+                    ghostOn ? "GHOST ON" : "GHOST OFF",
+                  ),
                 !j && themeBtn(8),
               ),
           ),
